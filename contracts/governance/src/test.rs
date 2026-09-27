@@ -1,9 +1,20 @@
-use crate::{GovernorContract, GovernorContractClient, ProposalState};
+use crate::{
+    GovernorContract, GovernorContractClient, ProposalEvent, ProposalState, VoteCastEvent,
+};
 use soroban_sdk::{
     symbol_short,
-    testutils::{Address as _, Ledger as _},
-    vec, Address, Env, IntoVal, Symbol, Val, Vec,
+    testutils::{Address as _, Events as _, Ledger as _},
+    vec,
+    xdr::ToXdr,
+    Address, Env, IntoVal, Symbol, Val, Vec,
 };
+
+fn assert_last_event(env: &Env, contract: &Address, name: &str, data: Val) {
+    let (emitter, topics, emitted_data) = env.events().all().last().unwrap();
+    assert_eq!(emitter, *contract);
+    assert_eq!(topics, vec![env, Symbol::new(env, name).into_val(env)]);
+    assert_eq!(emitted_data.to_xdr(env), data.to_xdr(env));
+}
 
 #[soroban_sdk::contract]
 pub struct VotingToken;
@@ -95,6 +106,17 @@ fn test_governance_full_flow() {
         &vec![&env, args.clone()],
         &description,
     );
+    assert_last_event(
+        &env,
+        &governor_id,
+        "proposal_created",
+        ProposalEvent {
+            proposal_id,
+            caller: proposer.clone(),
+            timestamp: 0,
+        }
+        .into_val(&env),
+    );
 
     assert_eq!(client.state(&proposal_id), ProposalState::Pending);
 
@@ -104,6 +126,19 @@ fn test_governance_full_flow() {
 
     // 5. Vote
     client.cast_vote(&voter1, &proposal_id, &1); // Support (6000 votes)
+    assert_last_event(
+        &env,
+        &governor_id,
+        "vote_cast",
+        VoteCastEvent {
+            proposal_id,
+            caller: voter1.clone(),
+            timestamp: 3601,
+            support: 1,
+            weight: 6000,
+        }
+        .into_val(&env),
+    );
     client.cast_vote(&voter2, &proposal_id, &0); // Against (3000 votes)
 
     // Total votes: 9000 (90%) -> Quorum Met. Majority: 6000/9000 (66%) -> Threshold Met.
@@ -116,8 +151,56 @@ fn test_governance_full_flow() {
     client.queue(&proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Queued);
 
-    client.execute(&proposal_id);
+    client.execute(&proposer, &proposal_id);
+    assert_last_event(
+        &env,
+        &governor_id,
+        "proposal_executed",
+        ProposalEvent {
+            proposal_id,
+            caller: proposer.clone(),
+            timestamp: 3601 + 86401,
+        }
+        .into_val(&env),
+    );
     assert_eq!(client.state(&proposal_id), ProposalState::Executed);
+}
+
+#[test]
+fn test_proposer_can_cancel_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let proposer = Address::generate(&env);
+    let token_id = env.register_contract(None, VotingToken);
+    VotingTokenClient::new(&env, &token_id).set_balance(&proposer, &1_000);
+    let timelock_id = env.register_contract(None, MockTimelock);
+    let governor_id = env.register_contract(None, GovernorContract);
+    let client = GovernorContractClient::new(&env, &governor_id);
+    client.init(&token_id, &timelock_id, &4000, &5001, &1000, &0, &500);
+
+    let proposal_id = client.propose(
+        &proposer,
+        &vec![&env],
+        &vec![&env],
+        &vec![&env],
+        &symbol_short!("cancel"),
+    );
+    client.cancel(&proposer, &proposal_id);
+
+    assert_last_event(
+        &env,
+        &governor_id,
+        "proposal_cancelled",
+        ProposalEvent {
+            proposal_id,
+            caller: proposer,
+            timestamp: 0,
+        }
+        .into_val(&env),
+    );
+
+    assert_eq!(client.state(&proposal_id), ProposalState::Canceled);
 }
 
 #[test]

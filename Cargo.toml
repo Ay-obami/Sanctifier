@@ -8,6 +8,8 @@ members = [
     "contracts/security-disclaimers",
     "contracts/vulnerable-contract",
     "contracts/token-with-bugs",
+    "contracts/oracle",
+    "contracts/allowance-race",
     "contracts/amm-pool",
     "contracts/governance",
     "contracts/multisig",

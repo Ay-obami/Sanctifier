@@ -20,6 +20,7 @@ pub enum DataKey {
     Validators,
     Threshold,
     PriceData,
+    LastUpdated,
 }
 
 #[contracttype]
@@ -74,12 +75,20 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DataKey::PriceData, &PriceData { price, timestamp });
+        env.storage()
+            .instance()
+            .set(&DataKey::LastUpdated, &env.ledger().timestamp());
 
         env.events()
             .publish((symbol_short!("price_upd"),), (price, timestamp));
     }
 
-    /// Read the latest price. Validates that the price is not older than max_age.
+    /// Read the latest price. Validates that the on-chain update is not older
+    /// than `max_age` seconds.
+    ///
+    /// Staleness is measured from the ledger timestamp recorded by
+    /// [`update_price`], not the feeder-supplied timestamp stored in
+    /// [`PriceData`]. This prevents a feeder from making old data appear fresh.
     pub fn get_price(env: Env, max_age: u64) -> u128 {
         let data: PriceData = env
             .storage()
@@ -89,11 +98,59 @@ impl OracleContract {
                 env.panic_with_error(Error::StalePrice);
             });
 
-        let current_time = env.ledger().timestamp();
-        if current_time > data.timestamp + max_age {
+        let updated_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LastUpdated)
+            .unwrap_or_else(|| env.panic_with_error(Error::StalePrice));
+        let age = env.ledger().timestamp().saturating_sub(updated_at);
+        if age > max_age {
             env.panic_with_error(Error::StalePrice);
         }
 
         data.price
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    fn setup(env: &Env) -> (OracleContractClient<'_>, Address) {
+        env.mock_all_auths();
+        let validator = Address::generate(env);
+        let contract_id = env.register_contract(None, OracleContract);
+        let client = OracleContractClient::new(env, &contract_id);
+        client.init(&Vec::from_array(env, [validator.clone()]), &1);
+        (client, validator)
+    }
+
+    #[test]
+    fn stale_price_returns_error() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_000);
+        let (client, validator) = setup(&env);
+
+        // A feeder-supplied future timestamp must not make old data look fresh.
+        client.update_price(&42, &u64::MAX, &Vec::from_array(&env, [validator]));
+        env.ledger().set_timestamp(1_011);
+
+        assert!(client.try_get_price(&10).is_err());
+    }
+
+    #[test]
+    fn every_update_refreshes_last_updated_time() {
+        let env = Env::default();
+        env.ledger().set_timestamp(100);
+        let (client, validator) = setup(&env);
+        let validators = Vec::from_array(&env, [validator]);
+
+        client.update_price(&10, &1, &validators);
+        env.ledger().set_timestamp(109);
+        client.update_price(&11, &1, &validators);
+        env.ledger().set_timestamp(115);
+
+        assert_eq!(client.get_price(&6), 11);
     }
 }

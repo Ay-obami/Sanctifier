@@ -23,6 +23,7 @@
 //! | [`GovernorContract::init`] | One-time initialisation |
 //! | [`GovernorContract::propose`] | Submit a new governance proposal |
 //! | [`GovernorContract::cast_vote`] | Vote for / against / abstain on a proposal |
+//! | [`GovernorContract::cancel`] | Cancel a proposal (proposer only) |
 //! | [`GovernorContract::queue`] | Queue a succeeded proposal in the timelock |
 //! | [`GovernorContract::execute`] | Execute a queued proposal |
 //! | [`GovernorContract::state`] | Query the current [`ProposalState`] |
@@ -141,6 +142,26 @@ pub struct Proposal {
     pub queued: bool,
 }
 
+/// Common payload for proposal lifecycle events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProposalEvent {
+    pub proposal_id: u32,
+    pub caller: Address,
+    pub timestamp: u64,
+}
+
+/// Payload emitted whenever a vote is cast.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VoteCastEvent {
+    pub proposal_id: u32,
+    pub caller: Address,
+    pub timestamp: u64,
+    pub support: u32,
+    pub weight: i128,
+}
+
 #[contract]
 pub struct GovernorContract;
 
@@ -257,8 +278,14 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(id), &proposal);
 
-        env.events()
-            .publish((symbol_short!("proposed"), id), proposer);
+        env.events().publish(
+            (Symbol::new(&env, "proposal_created"),),
+            ProposalEvent {
+                proposal_id: id,
+                caller: proposer,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         id
     }
@@ -303,8 +330,14 @@ impl GovernorContract {
         env.storage().persistent().set(&vote_key, &true);
 
         env.events().publish(
-            (symbol_short!("voted"), proposal_id, voter),
-            (support, weight),
+            (Symbol::new(&env, "vote_cast"),),
+            VoteCastEvent {
+                proposal_id,
+                caller: voter,
+                timestamp: now,
+                support,
+                weight,
+            },
         );
 
         weight
@@ -366,7 +399,8 @@ impl GovernorContract {
             .publish((symbol_short!("queued"), proposal_id), ());
     }
 
-    pub fn execute(env: Env, proposal_id: u32) {
+    pub fn execute(env: Env, caller: Address, proposal_id: u32) {
+        caller.require_auth();
         let mut proposal: Proposal = env
             .storage()
             .persistent()
@@ -410,8 +444,46 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
-        env.events()
-            .publish((symbol_short!("executed"), proposal_id), ());
+        env.events().publish(
+            (Symbol::new(&env, "proposal_executed"),),
+            ProposalEvent {
+                proposal_id,
+                caller,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Cancel a proposal. Only the proposal creator may cancel it, and an
+    /// already executed or canceled proposal cannot transition again.
+    pub fn cancel(env: Env, caller: Address, proposal_id: u32) {
+        caller.require_auth();
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
+
+        if caller != proposal.proposer {
+            env.panic_with_error(Error::Unauthorized);
+        }
+        if proposal.executed || proposal.canceled {
+            env.panic_with_error(Error::InvalidState);
+        }
+
+        proposal.canceled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_cancelled"),),
+            ProposalEvent {
+                proposal_id,
+                caller,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
     }
 
     pub fn state(env: Env, proposal_id: u32) -> ProposalState {
