@@ -14,8 +14,9 @@ export function NavBar() {
     { name: "Scan", href: "/scan" },
     { name: "Dashboard", href: "/dashboard" },
     { name: "Contracts", href: "/contracts" },
-    { name: "Audit", href: "/audit" },
     { name: "Playground", href: "/playground" },
+    { name: "Audit", href: "/audit" },
+    { name: "Issues", href: "/issues" },
     { name: "Terminal", href: "/terminal" },
   ];
 

@@ -21,6 +21,7 @@ export const PAGE_ITEMS: PaletteItem[] = [
   { id: "page:dashboard", label: "Dashboard", category: "Page", href: "/dashboard", description: "Findings, call graph, diff" },
   { id: "page:contracts", label: "Contracts Explorer", category: "Page", href: "/contracts", description: "Browse workspace contracts" },
   { id: "page:audit", label: "Audit Report", category: "Page", href: "/audit", description: "Workspace summary with PDF/SARIF export" },
+  { id: "page:issues", label: "Issues", category: "Page", href: "/issues", description: "Track GitHub issues for the repo" },
   { id: "page:playground", label: "Playground", category: "Page", href: "/playground" },
   { id: "page:terminal", label: "Terminal", category: "Page", href: "/terminal" },
   { id: "page:terms", label: "Terms of Service", category: "Page", href: "/terms" },
