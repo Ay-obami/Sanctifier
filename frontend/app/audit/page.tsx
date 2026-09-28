@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { Download, FileJson, FileText } from "lucide-react";
 import { Breadcrumbs } from "../components/Breadcrumbs";
@@ -9,6 +9,7 @@ import { useToast } from "../providers/ToastProvider";
 import { buildAuditReport, SEVERITIES, type SeverityCounts } from "../lib/audit-report";
 import { exportToPdf } from "../lib/export-pdf";
 import { findingsToSarif } from "../lib/sarif";
+import { onShortcut } from "../lib/keyboard-shortcuts";
 import type { Severity } from "../types";
 
 const SEVERITY_BAR: Record<Severity, string> = {
@@ -56,14 +57,17 @@ export default function AuditPage() {
   const toast = useToast();
   const report = useMemo(() => (workspace ? buildAuditReport(workspace) : null), [workspace]);
 
-  const handlePdf = async () => {
+  const handlePdf = useCallback(async () => {
     if (!report) return;
     try {
       await exportToPdf(report.findings, "Sanctifier Audit Report");
     } catch {
       toast.error("PDF export failed. Please try again.");
     }
-  };
+  }, [report, toast]);
+
+  // ⌘S / Ctrl+S exports this report (see KeyboardShortcuts)
+  useEffect(() => onShortcut("save", () => void handlePdf()), [handlePdf]);
 
   const handleSarif = () => {
     if (!report) return;

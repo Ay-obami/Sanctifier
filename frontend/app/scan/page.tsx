@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { AnalysisTerminal } from "../components/AnalysisTerminal";
 import { SanctityScore } from "../components/SanctityScore";
@@ -10,6 +10,8 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ZkFindingsPanel } from "../components/ZkFindingsPanel";
 import { nextScanProgressPhase } from "../lib/scan-progress";
 import { getSettingsHeaders } from "../lib/settings";
+import { exportToPdf } from "../lib/export-pdf";
+import { onShortcut } from "../lib/keyboard-shortcuts";
 import type { Finding, Severity } from "../types";
 import Link from "next/link";
 import { useOptionalToast } from "../providers/ToastProvider";
@@ -32,6 +34,7 @@ export default function ScanPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
   const [hasRunScan, setHasRunScan] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addLog = (text: string) => {
     setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${text}`]);
@@ -112,6 +115,27 @@ export default function ScanPage() {
     }
   }, [selectedFile, toast]);
 
+  // Keyboard shortcuts: ⌘U upload, ⌘↵ run, ⌘S export the report (see KeyboardShortcuts)
+  useEffect(() => onShortcut("upload", () => fileInputRef.current?.click()), []);
+
+  useEffect(() => onShortcut("run", () => void runAnalysis()), [runAnalysis]);
+
+  useEffect(
+    () =>
+      onShortcut("save", async () => {
+        if (findings.length === 0) {
+          toast.info("Run a scan first — there is no report to export yet.");
+          return;
+        }
+        try {
+          await exportToPdf(findings, "Sanctifier Scan Report");
+        } catch {
+          toast.error("PDF export failed. Please try again.");
+        }
+      }),
+    [findings, toast],
+  );
+
   // Pre-load a workspace contract when arriving from the Contracts Explorer (/scan?contract=<name>)
   useEffect(() => {
     const name = new URLSearchParams(window.location.search).get("contract");
@@ -159,6 +183,7 @@ export default function ScanPage() {
               : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
               }`}>
               <input
+                ref={fileInputRef}
                 type="file"
                 accept=".rs"
                 onChange={handleFileChange}
