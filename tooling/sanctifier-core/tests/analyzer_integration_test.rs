@@ -28,10 +28,7 @@ fn analyzer_detects_auth_gap_in_fixture() {
                 !findings.is_empty(),
                 "analyzer should detect findings in auth_gap_contract"
             );
-            let auth_findings: Vec<_> = findings
-                .iter()
-                .filter(|f| f.code == "S001")
-                .collect();
+            let auth_findings: Vec<_> = findings.iter().filter(|f| f.code == "S001").collect();
             assert!(
                 !auth_findings.is_empty(),
                 "should detect S001 (auth gap) in auth_gap_contract"
@@ -49,10 +46,7 @@ fn analyzer_detects_overflow_in_fixture() {
 
     match analyzer.analyze_path(&fixture, &rule_registry) {
         Ok(findings) => {
-            let overflow_findings: Vec<_> = findings
-                .iter()
-                .filter(|f| f.code == "S003")
-                .collect();
+            let overflow_findings: Vec<_> = findings.iter().filter(|f| f.code == "S003").collect();
             assert!(
                 !overflow_findings.is_empty(),
                 "should detect S003 (overflow) in overflow_contract"
@@ -92,7 +86,10 @@ fn analyzer_json_output_is_valid() {
     match analyzer.analyze_path(&fixture, &rule_registry) {
         Ok(findings) => {
             let json = serde_json::to_string(&findings);
-            assert!(json.is_ok(), "analyzer output should serialize to valid JSON");
+            assert!(
+                json.is_ok(),
+                "analyzer output should serialize to valid JSON"
+            );
         }
         Err(e) => panic!("analyzer failed: {}", e),
     }
