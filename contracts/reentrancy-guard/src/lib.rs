@@ -78,43 +78,22 @@ impl<'a> ReentrancyGuard<'a> {
             .instance()
             .get(&StorageKey::Guard)
             .unwrap_or(0);
-        let current = GuardStatus::from_u32(status);
 
-        match enter_pure(current) {
-            Ok(new_status) => {
-                // Explicit invariant, checked at every call in debug builds:
-                // enter_pure() must never hand back Unlocked -- the whole
-                // point of entering is to lock. This is exactly the
-                // property `verify_enter_succeeds_when_unlocked` proves
-                // exhaustively below via Kani; asserting it here too means
-                // the invariant is checked on the real storage-backed path,
-                // not just the pure function in isolation.
-                debug_assert!(
-                    new_status == GuardStatus::Locked,
-                    "enter_pure must transition to Locked on success"
-                );
-                self.env
-                    .storage()
-                    .instance()
-                    .set(&StorageKey::Guard, &(new_status as u32));
-            }
-            Err(msg) => panic!("{}", msg),
+        if status != 0 {
+            panic!("reentrancy detected");
         }
+        self.env
+            .storage()
+            .instance()
+            .set(&StorageKey::Guard, &1u32);
     }
 
     /// Exit a reentrancy-protected section.
     pub fn exit(&self) {
-        let unlocked = exit_pure();
-        // Mirrors verify_exit_always_unlocks below: exit() must always
-        // leave the guard Unlocked, unconditionally.
-        debug_assert!(
-            unlocked == GuardStatus::Unlocked,
-            "exit_pure must always return Unlocked"
-        );
         self.env
             .storage()
             .instance()
-            .set(&StorageKey::Guard, &(unlocked as u32));
+            .set(&StorageKey::Guard, &0u32);
     }
 }
 

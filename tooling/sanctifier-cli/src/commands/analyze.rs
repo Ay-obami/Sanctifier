@@ -333,6 +333,7 @@ pub(crate) fn run_analysis(args: AnalyzeArgs) -> anyhow::Result<bool> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "schema_version": "1.0.0",
+                "sanctifier_version": env!("CARGO_PKG_VERSION"),
                 "findings": rule_violations,
                 "rule_violations": rule_violations,
                 "error_codes": finding_codes::all_finding_codes(),

@@ -339,45 +339,16 @@ impl ArithVisitor {
     /// - `&&`, `||`
     fn classify_op(op: &syn::BinOp) -> Option<(&'static str, &'static str)> {
         match op {
-            syn::BinOp::Add(_) => Some((
-                "+",
-                "Use .checked_add(rhs) or .saturating_add(rhs) to handle overflow",
-            )),
-            syn::BinOp::Sub(_) => Some((
-                "-",
-                "Use .checked_sub(rhs) or .saturating_sub(rhs) to handle underflow",
-            )),
-            syn::BinOp::Mul(_) => Some((
-                "*",
-                "Use .checked_mul(rhs) or .saturating_mul(rhs) to handle overflow",
-            )),
-            syn::BinOp::Div(_) => {
-                Some(("/", "Use .checked_div(rhs) to avoid division-by-zero panic"))
-            }
-            syn::BinOp::Rem(_) => {
-                Some(("%", "Use .checked_rem(rhs) to avoid modulo-by-zero panic"))
-            }
-            syn::BinOp::AddAssign(_) => Some((
-                "+=",
-                "Replace a += b with a = a.checked_add(b).expect(\"overflow\")",
-            )),
-            syn::BinOp::SubAssign(_) => Some((
-                "-=",
-                "Replace a -= b with a = a.checked_sub(b).expect(\"underflow\")",
-            )),
-            syn::BinOp::MulAssign(_) => Some((
-                "*=",
-                "Replace a *= b with a = a.checked_mul(b).expect(\"overflow\")",
-            )),
-
-            syn::BinOp::DivAssign(_) => Some((
-                "/=",
-                "Replace a /= b with a = a.checked_div(b).expect(\"division by zero\")",
-            )),
-            syn::BinOp::RemAssign(_) => Some((
-                "%=",
-                "Replace a %= b with a = a.checked_rem(b).expect(\"modulo by zero\")",
-            )),
+            syn::BinOp::Add(_) => Some(("+", "Use .checked_add(rhs) or .saturating_add(rhs) to handle overflow")),
+            syn::BinOp::Sub(_) => Some(("-", "Use .checked_sub(rhs) or .saturating_sub(rhs) to handle underflow")),
+            syn::BinOp::Mul(_) => Some(("*", "Use .checked_mul(rhs) or .saturating_mul(rhs) to handle overflow")),
+            syn::BinOp::Div(_) => Some(("/", "Use .checked_div(rhs) to avoid division-by-zero panic")),
+            syn::BinOp::Rem(_) => Some(("%", "Use .checked_rem(rhs) to avoid modulo-by-zero panic")),
+            syn::BinOp::AddAssign(_) => Some(("+=", "Replace a += b with a = a.checked_add(b).expect(\"overflow\")")),
+            syn::BinOp::SubAssign(_) => Some(("-=", "Replace a -= b with a = a.checked_sub(b).expect(\"underflow\")")),
+            syn::BinOp::MulAssign(_) => Some(("*=", "Replace a *= b with a = a.checked_mul(b).expect(\"overflow\")")),
+            syn::BinOp::DivAssign(_) => Some(("/=", "Replace a /= b with a = a.checked_div(b).expect(\"division by zero\")")),
+            syn::BinOp::RemAssign(_) => Some(("%=", "Replace a %= b with a = a.checked_rem(b).expect(\"modulo by zero\")")),
             _ => None,
         }
     }
@@ -455,7 +426,7 @@ impl<'ast> Visit<'ast> for ArithVisitor {
     /// If all conditions are met, creates an `ArithmeticIssue` finding.
     fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
         if self.index_depth == 0 {
-            if let Some(fn_name) = self.current_fn.clone() {
+            if let Some(ref fn_name) = self.current_fn {
                 if let Some((op_str, suggestion)) = Self::classify_op(&node.op) {
                     if !is_string_literal(&node.left)
                         && !is_string_literal(&node.right)
@@ -494,7 +465,7 @@ impl<'ast> Visit<'ast> for ArithVisitor {
     /// - `.checked_fixed_point_mul(...)`
     /// - `.checked_fixed_point_div(...)`
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if let Some(fn_name) = self.current_fn.clone() {
+        if let Some(ref fn_name) = self.current_fn {
             let method_name = node.method.to_string();
             if let Some(suggestion) = classify_math_method(&method_name) {
                 let key = (fn_name.clone(), method_name.clone());
@@ -522,7 +493,7 @@ impl<'ast> Visit<'ast> for ArithVisitor {
     ///
     /// These are typically utility functions that may not have overflow protection.
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let Some(fn_name) = self.current_fn.clone() {
+        if let Some(ref fn_name) = self.current_fn {
             if let syn::Expr::Path(expr_path) = &*node.func {
                 if let Some(last_segment) = expr_path.path.segments.last() {
                     let func_name = last_segment.ident.to_string();
