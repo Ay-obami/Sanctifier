@@ -30,3 +30,9 @@ name = "fuzz_execute_guarded"
 path = "fuzz_targets/fuzz_execute_guarded.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_init_and_stats"
+path = "fuzz_targets/fuzz_init_and_stats.rs"
+test = false
+doc = false
