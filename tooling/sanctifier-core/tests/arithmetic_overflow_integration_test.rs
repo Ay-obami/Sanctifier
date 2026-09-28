@@ -333,7 +333,12 @@ fn test_skip_test_functions() {
     let findings = json["findings"].as_array().unwrap();
 
     // Only production_code should trigger (1 finding)
-    assert_eq!(findings.len(), 1, "Expected 1 finding for test_skip_test_functions; got: {:?}", findings);
+    assert_eq!(
+        findings.len(),
+        1,
+        "Expected 1 finding for test_skip_test_functions; got: {:?}",
+        findings
+    );
     assert_eq!(
         findings[0]["location"].as_str().unwrap(),
         "production_code:3"
