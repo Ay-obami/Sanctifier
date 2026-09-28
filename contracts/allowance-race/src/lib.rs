@@ -59,6 +59,7 @@ impl AllowanceRaceContract {
         amount: i128,
     ) {
         spender.require_auth();
+        assert!(amount > 0, "amount must be positive");
         let key = AllowanceKey {
             owner: owner.clone(),
             spender: spender.clone(),

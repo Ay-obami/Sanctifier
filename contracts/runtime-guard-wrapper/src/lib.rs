@@ -266,13 +266,6 @@ impl RuntimeGuardWrapper {
     /// **Gas optimization**: Direct counter increment without extra reads.
     #[inline]
     fn post_execution_guards(env: Env) -> Result<(), RuntimeGuardError> {
-        // Optimized: increment counter directly without separate read
-        let checked_key = INVARIANTS_CHECKED;
-        let current: u32 = env.storage().persistent().get(&checked_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&checked_key, &current.saturating_add(1));
-
         Self::emit_guard_event(
             env,
             event_fixtures::EVENT_POST_EXEC_GUARD,
@@ -376,10 +369,10 @@ impl RuntimeGuardWrapper {
     /// **Gas optimization**: Maintains fixed-size log (avoids unbounded growth).
     /// Uses in-place rotation instead of allocating new vectors.
     fn log_execution(env: Env, function_name: &Symbol, _result: &Val) {
-        let persistent = env.storage().persistent();
+        let temporary = env.storage().temporary();
         let call_log_symbol = CALL_LOG;
 
-        let mut log: Vec<Symbol> = persistent
+        let mut log: Vec<Symbol> = temporary
             .get(&call_log_symbol)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -390,7 +383,7 @@ impl RuntimeGuardWrapper {
             log.remove(0); // Remove oldest entry (FIFO)
         }
 
-        persistent.set(&call_log_symbol, &log);
+        temporary.set(&call_log_symbol, &log);
 
         Self::emit_guard_event(
             env,
@@ -403,10 +396,10 @@ impl RuntimeGuardWrapper {
     ///
     /// **Gas optimization**: Packed tuple format reduces storage by 50%.
     fn record_metrics(env: Env, metrics: ExecutionMetrics) {
-        let persistent = env.storage().persistent();
+        let temporary = env.storage().temporary();
         let metrics_symbol = EXECUTION_METRICS;
 
-        let mut metrics_vec: Vec<(u32, u64)> = persistent
+        let mut metrics_vec: Vec<(u32, u64)> = temporary
             .get(&metrics_symbol)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -417,17 +410,17 @@ impl RuntimeGuardWrapper {
             metrics_vec.remove(0);
         }
 
-        persistent.set(&metrics_symbol, &metrics_vec);
+        temporary.set(&metrics_symbol, &metrics_vec);
     }
 
     fn record_guard_failure(env: Env, failure: Symbol) {
-        let persistent = env.storage().persistent();
+        let temporary = env.storage().temporary();
         let failure_symbol = GUARD_FAILURES;
-        let mut failures: Vec<Symbol> = persistent
+        let mut failures: Vec<Symbol> = temporary
             .get(&failure_symbol)
             .unwrap_or_else(|| Vec::new(&env));
         failures.push_back(failure);
-        persistent.set(&failure_symbol, &failures);
+        temporary.set(&failure_symbol, &failures);
         Self::emit_guard_event(
             env,
             event_fixtures::EVENT_GUARD_FAILURE,
@@ -440,17 +433,15 @@ impl RuntimeGuardWrapper {
     }
 
     pub fn get_stats(env: Env) -> (u32, u32, u32) {
-        let persistent = env.storage().persistent();
+        let temporary = env.storage().temporary();
 
-        let invariants_checked: u32 = persistent.get(&INVARIANTS_CHECKED).unwrap_or(0);
+        let call_log: Vec<Symbol> = temporary.get(&CALL_LOG).unwrap_or_else(|| Vec::new(&env));
 
-        let call_log: Vec<Symbol> = persistent.get(&CALL_LOG).unwrap_or_else(|| Vec::new(&env));
-
-        let guard_failures: Vec<Symbol> = persistent
+        let guard_failures: Vec<Symbol> = temporary
             .get(&GUARD_FAILURES)
             .unwrap_or_else(|| Vec::new(&env));
 
-        (invariants_checked, call_log.len(), guard_failures.len())
+        (0, call_log.len() as u32, guard_failures.len() as u32)
     }
 
     /// Health check with optimized storage reads.
@@ -465,14 +456,14 @@ impl RuntimeGuardWrapper {
         // Single storage read for metrics (cached)
         let metrics: Vec<(u32, u64)> = env
             .storage()
-            .persistent()
+            .temporary()
             .get(&EXECUTION_METRICS)
             .unwrap_or_else(|| Vec::new(&env));
 
         // Single storage read for call log (cached)
         let call_log: Vec<Symbol> = env
             .storage()
-            .persistent()
+            .temporary()
             .get(&CALL_LOG)
             .unwrap_or_else(|| Vec::new(&env));
 
