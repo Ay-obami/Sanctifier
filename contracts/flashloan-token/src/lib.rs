@@ -18,7 +18,7 @@
 //! | `ADMIN`        | `Address` | Instance   | Contract administrator          |
 //! | `FEE_BPS`      | `u32`     | Instance   | Fee in basis-points (default 9) |
 //! | `PAUSED`       | `bool`    | Instance   | Emergency pause flag            |
-//! | `FL_LOCK`      | `bool`    | Instance   | Re-entrancy mutex               |
+//! | `FL_LOCK`      | `bool`    | Temporary  | Re-entrancy mutex (TTL-extended) |
 //! | `TOTAL_FEES`   | `i128`    | Persistent | Accumulated fees collected      |
 //! | `TOTAL_LOANS`  | `u32`     | Persistent | Total number of flashloans      |
 
@@ -254,6 +254,12 @@ impl FlashloanToken {
         assert!(!paused, "contract is paused");
     }
 
+    /// Take the re-entrancy mutex.
+    ///
+    /// The guard lives in temporary storage so it is scoped to the transaction
+    /// and can never be resurrected by a stale ledger entry, and its TTL is
+    /// bumped on every acquisition so it cannot lapse between the guard being
+    /// set and the loan being repaid.
     fn acquire_lock(env: &Env) {
         let storage = env.storage().temporary();
         let locked: bool = storage.get(&FL_LOCK).unwrap_or(false);
@@ -274,7 +280,7 @@ mod test {
     use super::*;
     use soroban_sdk::{
         symbol_short,
-        testutils::Address as _,
+        testutils::{storage::Temporary as _, Address as _, Ledger as _},
         Address, Bytes, Env,
     };
 
@@ -311,13 +317,7 @@ mod test {
                 .set(&symbol_short!("LENDER"), &lender);
         }
 
-        pub fn exec_op(
-            e: Env,
-            token: Address,
-            amount: i128,
-            fee: i128,
-            _params: Bytes,
-        ) {
+        pub fn exec_op(e: Env, token: Address, amount: i128, fee: i128, _params: Bytes) {
             let lender: Address = e
                 .storage()
                 .instance()
@@ -334,16 +334,69 @@ mod test {
 
     #[soroban_sdk::contractimpl]
     impl BadReceiver {
-        pub fn fail_op(
-            _e: Env,
-            _token: Address,
-            _amount: i128,
-            _fee: i128,
-            _params: Bytes,
-        ) {
+        pub fn fail_op(_e: Env, _token: Address, _amount: i128, _fee: i128, _params: Bytes) {
             panic!("callback failed intentionally");
         }
     }
+
+    /// Receiver that calls back into the lender from inside `exec_op`.
+    ///
+    /// It records whether the nested borrow was allowed and then repays the
+    /// outer loan honestly so the surrounding flashloan can complete. It lives
+    /// in its own module because the generated contract-spec identifiers are
+    /// not namespaced per contract.
+    mod reentrant {
+        use super::*;
+
+        #[soroban_sdk::contract]
+        pub struct ReentrantReceiver;
+
+        #[soroban_sdk::contractimpl]
+        impl ReentrantReceiver {
+            pub fn set_lender(e: Env, lender: Address) {
+                e.storage()
+                    .instance()
+                    .set(&symbol_short!("LENDER"), &lender);
+            }
+
+            /// Whether the re-entrant borrow was allowed to proceed.
+            pub fn nested_borrow_succeeded(e: Env) -> bool {
+                e.storage()
+                    .instance()
+                    .get(&symbol_short!("NESTED"))
+                    .unwrap_or(false)
+            }
+
+            pub fn exec_op(e: Env, token: Address, amount: i128, fee: i128, _params: Bytes) {
+                let lender: Address = e
+                    .storage()
+                    .instance()
+                    .get(&symbol_short!("LENDER"))
+                    .unwrap();
+
+                let nested = FlashloanTokenClient::new(&e, &lender).try_flashloan(
+                    &lender,
+                    &token,
+                    &(amount / 2),
+                    &Bytes::new(&e),
+                );
+                let nested_ok = nested.is_ok();
+                e.storage()
+                    .instance()
+                    .set(&symbol_short!("NESTED"), &nested_ok);
+
+                let receiver = e.current_contract_address();
+                let token_client = soroban_sdk::token::Client::new(&e, &token);
+                token_client.transfer(&receiver, &lender, &(amount + fee));
+            }
+        }
+    }
+
+    use reentrant::{ReentrantReceiver, ReentrantReceiverClient};
+
+    /// Throwaway temporary key used to measure the *default* temporary-entry TTL
+    /// so the guard's bump can be compared against it.
+    const PROBE_KEY: Symbol = symbol_short!("PROBE");
 
     #[test]
     fn test_flashloan_success() {
@@ -410,11 +463,133 @@ mod test {
         let client = FlashloanTokenClient::new(&env, &flashloan_addr);
         client.initialize(&admin, &9);
 
-        // This test would need a reentrant receiver to properly test
-        // For now, we verify the lock is acquired and released correctly
+        // This test verifies the lock is acquired and released correctly around
+        // a well-behaved receiver; `test_reentrant_receiver_is_rejected` covers
+        // the actual re-entrancy path.
         let receiver = env.register_contract(None, GoodReceiver);
         GoodReceiverClient::new(&env, &receiver).set_lender(&flashloan_addr);
         let fee = client.flashloan(&receiver, &token_addr, &1000, &Bytes::new(&env));
         assert_eq!(fee, 0);
+    }
+
+    /// A receiver that calls `flashloan` again from inside the callback must be
+    /// rejected: the guard has to still be held while the loan is outstanding.
+    #[test]
+    fn test_reentrant_receiver_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let receiver = env.register_contract(None, ReentrantReceiver);
+        let token_addr = env.register_contract(None, MockToken);
+        let flashloan_addr = env.register_contract(None, FlashloanToken);
+
+        let token_client = MockTokenClient::new(&env, &token_addr);
+        token_client.set_balance(&flashloan_addr, &10_000);
+
+        let client = FlashloanTokenClient::new(&env, &flashloan_addr);
+        client.initialize(&admin, &9);
+        ReentrantReceiverClient::new(&env, &receiver).set_lender(&flashloan_addr);
+
+        let fee = client.flashloan(&receiver, &token_addr, &1000, &Bytes::new(&env));
+        assert_eq!(fee, 0);
+
+        assert!(
+            !ReentrantReceiverClient::new(&env, &receiver).nested_borrow_succeeded(),
+            "re-entrant flashloan was allowed while the outer loan was outstanding"
+        );
+
+        // The rejected re-entrant borrow must not have moved any funds.
+        assert_eq!(token_client.balance(&flashloan_addr), 10_000);
+    }
+
+    /// S025 regression: the guard must have its TTL bumped on acquisition, and
+    /// must live in temporary storage so it cannot be lost to a ledger-TTL
+    /// expiry between the guard being set and the loan being repaid.
+    #[test]
+    fn test_reentrancy_guard_ttl_is_bumped() {
+        let env = Env::default();
+        let flashloan_addr = env.register_contract(None, FlashloanToken);
+
+        // Default TTL for a freshly written temporary entry, with no bump.
+        let baseline: u32 = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().set(&PROBE_KEY, &true);
+            env.storage().temporary().get_ttl(&PROBE_KEY)
+        });
+
+        env.as_contract(&flashloan_addr, || {
+            FlashloanToken::acquire_lock(&env);
+        });
+
+        let ttl: u32 = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().get_ttl(&FL_LOCK)
+        });
+        assert_eq!(ttl, LOCK_TTL);
+        assert!(
+            ttl > baseline,
+            "guard TTL was not extended past the default"
+        );
+
+        // The guard must not be reachable through ledger-persistent storage.
+        assert!(!env.as_contract(&flashloan_addr, || env.storage().instance().has(&FL_LOCK)));
+        assert!(!env.as_contract(&flashloan_addr, || env.storage().persistent().has(&FL_LOCK)));
+    }
+
+    /// S025 regression: with the guard stored in instance storage and no TTL
+    /// bump, the entry lapses after the default temporary TTL and re-entrancy
+    /// becomes possible. Simulate the ledger crossing that boundary and assert
+    /// the guard is still held.
+    #[test]
+    fn test_guard_persists_across_simulated_ttl_boundary() {
+        let env = Env::default();
+        let flashloan_addr = env.register_contract(None, FlashloanToken);
+
+        // TTL the guard would have had without the `extend_ttl` bump.
+        let unbumped_ttl: u32 = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().set(&PROBE_KEY, &true);
+            env.storage().temporary().get_ttl(&PROBE_KEY)
+        });
+        assert!(
+            unbumped_ttl < LOCK_TTL,
+            "test premise: bump must widen the TTL"
+        );
+
+        env.as_contract(&flashloan_addr, || {
+            FlashloanToken::acquire_lock(&env);
+        });
+
+        // Well past the unbumped TTL: the guard must still be set.
+        env.ledger().set_sequence_number(unbumped_ttl + 5);
+        let still_locked: bool = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().get(&FL_LOCK).unwrap_or(false)
+        });
+        assert!(
+            still_locked,
+            "re-entrancy guard lapsed at ledger {} before the extended TTL of {LOCK_TTL}",
+            unbumped_ttl + 5
+        );
+
+        // ...and right up against the extended TTL boundary.
+        env.ledger().set_sequence_number(LOCK_TTL);
+        let ttl_at_boundary: u32 = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().get_ttl(&FL_LOCK)
+        });
+        assert_eq!(ttl_at_boundary, 0);
+        let locked_at_boundary: bool = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().get(&FL_LOCK).unwrap_or(false)
+        });
+        assert!(locked_at_boundary, "guard lapsed before its extended TTL");
+
+        // The boundary is real, not vacuously satisfied: one ledger later the
+        // entry is genuinely gone. A Soroban transaction cannot span ledgers, so
+        // the guard is always held for the whole borrow-and-repay window.
+        env.ledger().set_sequence_number(LOCK_TTL + 1);
+        let locked_after_boundary: bool = env.as_contract(&flashloan_addr, || {
+            env.storage().temporary().get(&FL_LOCK).unwrap_or(false)
+        });
+        assert!(
+            !locked_after_boundary,
+            "guard outlived its extended TTL; the boundary assertion is vacuous"
+        );
     }
 }

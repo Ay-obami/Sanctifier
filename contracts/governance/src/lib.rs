@@ -406,6 +406,13 @@ impl GovernorContract {
         // storage surfaces as `NotInitialized` rather than a trap.
         let config = load_config(&env)?;
         let mut proposal = load_proposal(&env, proposal_id)?;
+    pub fn execute(env: Env, caller: Address, proposal_id: u32) {
+        caller.require_auth_for_args((proposal_id,).into_val(&env));
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
 
         let state = Self::state(env.clone(), proposal_id)?;
         if proposal.executed || state != ProposalState::Queued {

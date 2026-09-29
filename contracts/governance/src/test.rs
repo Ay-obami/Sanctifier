@@ -360,4 +360,8 @@ fn test_min_quorum_blocks_queueing() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, Error::InvalidState);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.queue(&proposer, &proposal_id);
+    }));
+    assert!(result.is_err(), "queue should have failed for insufficient quorum");
 }
