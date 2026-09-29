@@ -151,7 +151,7 @@ fn test_governance_full_flow() {
     assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
 
     // 7. Queue and Execute
-    client.queue(&proposal_id);
+    client.queue(&proposer, &proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Queued);
 
     client.execute(&proposer, &proposal_id);
@@ -320,7 +320,7 @@ fn test_min_quorum_blocks_queueing() {
 
     // A defeated proposal cannot be queued.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.queue(&proposal_id);
+        client.queue(&proposer, &proposal_id);
     }));
     assert!(result.is_err(), "queue should have failed for insufficient quorum");
 }

@@ -347,7 +347,7 @@ impl GovernorContract {
     }
 
     pub fn queue(env: Env, caller: Address, proposal_id: u32) {
-        caller.require_auth_for_args((&proposal_id,).into_val(&env));
+        caller.require_auth_for_args((proposal_id,).into_val(&env));
 
         let mut proposal: Proposal = env
             .storage()
@@ -405,7 +405,7 @@ impl GovernorContract {
     }
 
     pub fn execute(env: Env, caller: Address, proposal_id: u32) {
-        caller.require_auth_for_args((&proposal_id,).into_val(&env));
+        caller.require_auth_for_args((proposal_id,).into_val(&env));
         let mut proposal: Proposal = env
             .storage()
             .persistent()
@@ -467,7 +467,7 @@ impl GovernorContract {
     /// Cancel a proposal. Only the proposal creator may cancel it, and an
     /// already executed or canceled proposal cannot transition again.
     pub fn cancel(env: Env, caller: Address, proposal_id: u32) {
-        caller.require_auth_for_args((&proposal_id,).into_val(&env));
+        caller.require_auth_for_args((proposal_id,).into_val(&env));
         let mut proposal: Proposal = env
             .storage()
             .persistent()
