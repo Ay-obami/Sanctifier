@@ -1,7 +1,7 @@
 extern crate std;
 
 use crate::{
-    GovernorContract, GovernorContractClient, ProposalEvent, ProposalState, VoteCastEvent,
+    Error, GovernorContract, GovernorContractClient, ProposalEvent, ProposalState, VoteCastEvent,
 };
 use soroban_sdk::{
     symbol_short,
@@ -180,7 +180,16 @@ fn test_proposer_can_cancel_proposal() {
     let timelock_id = env.register_contract(None, MockTimelock);
     let governor_id = env.register_contract(None, GovernorContract);
     let client = GovernorContractClient::new(&env, &governor_id);
-    client.init(&token_id, &timelock_id, &4000, &5001, &1000, &0, &500, &1000);
+    client.init(
+        &token_id,
+        &timelock_id,
+        &4000,
+        &5001,
+        &1000,
+        &0,
+        &500,
+        &1000,
+    );
 
     let proposal_id = client.propose(
         &proposer,
@@ -224,7 +233,16 @@ fn test_quorum_not_met() {
     let governor_id = env.register_contract(None, GovernorContract);
     let client = GovernorContractClient::new(&env, &governor_id);
 
-    client.init(&token_id, &timelock_id, &4000, &5001, &1000, &0, &500, &1000);
+    client.init(
+        &token_id,
+        &timelock_id,
+        &4000,
+        &5001,
+        &1000,
+        &0,
+        &500,
+        &1000,
+    );
 
     let proposal_id = client.propose(
         &proposer,
@@ -258,7 +276,16 @@ fn test_insufficient_min_quorum_defeats_proposal() {
     let client = GovernorContractClient::new(&env, &governor_id);
 
     // min_quorum = 1000, but voter only has 500 tokens
-    client.init(&token_id, &timelock_id, &4000, &5001, &1000, &0, &500, &1000);
+    client.init(
+        &token_id,
+        &timelock_id,
+        &4000,
+        &5001,
+        &1000,
+        &0,
+        &500,
+        &1000,
+    );
 
     let proposal_id = client.propose(
         &proposer,
@@ -300,7 +327,16 @@ fn test_min_quorum_blocks_queueing() {
     // Total supply = 10000
     // voter1 + voter2 = 5000 votes = 50% > 40% (percentage quorum passes)
     // But 5000 < 6000 (absolute min_quorum fails)
-    client.init(&token_id, &timelock_id, &4000, &5001, &1000, &0, &500, &6000);
+    client.init(
+        &token_id,
+        &timelock_id,
+        &4000,
+        &5001,
+        &1000,
+        &0,
+        &500,
+        &6000,
+    );
 
     let proposal_id = client.propose(
         &proposer,
@@ -319,6 +355,11 @@ fn test_min_quorum_blocks_queueing() {
     assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
 
     // A defeated proposal cannot be queued.
+    let err = client
+        .try_queue(&proposer, &proposal_id)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::InvalidState);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         client.queue(&proposer, &proposal_id);
     }));

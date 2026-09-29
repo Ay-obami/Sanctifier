@@ -239,14 +239,14 @@ impl GovernorContract {
         functions: Vec<Symbol>,
         args: Vec<Vec<Val>>,
         description: Symbol,
-    ) -> u32 {
+    ) -> Result<u32, Error> {
         proposer.require_auth();
 
-        let config: GovernanceConfig = env.storage().instance().get(&DataKey::Config).unwrap();
+        let config = load_config(&env)?;
 
         let token_client = token::TokenClient::new(&env, &config.token);
         if token_client.balance(&proposer) < config.proposal_threshold {
-            env.panic_with_error(Error::ProposalThresholdNotMet);
+            return Err(Error::ProposalThresholdNotMet);
         }
 
         let id: u32 = env
@@ -290,41 +290,42 @@ impl GovernorContract {
             },
         );
 
-        id
+        Ok(id)
     }
 
-    pub fn cast_vote(env: Env, voter: Address, proposal_id: u32, support: u32) -> i128 {
+    pub fn cast_vote(
+        env: Env,
+        voter: Address,
+        proposal_id: u32,
+        support: u32,
+    ) -> Result<i128, Error> {
         voter.require_auth();
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
+        let mut proposal = load_proposal(&env, proposal_id)?;
 
         let now = env.ledger().timestamp();
         if now < proposal.start_time || now > proposal.end_time {
-            env.panic_with_error(Error::InvalidState);
+            return Err(Error::InvalidState);
         }
 
         let vote_key = DataKey::Votes(proposal_id, voter.clone());
         if env.storage().persistent().has(&vote_key) {
-            env.panic_with_error(Error::AlreadyVoted);
+            return Err(Error::AlreadyVoted);
         }
 
-        let config: GovernanceConfig = env.storage().instance().get(&DataKey::Config).unwrap();
+        let config = load_config(&env)?;
         let token_client = token::TokenClient::new(&env, &config.token);
         let weight = token_client.balance(&voter);
 
         if weight == 0 {
-            env.panic_with_error(Error::Unauthorized);
+            return Err(Error::Unauthorized);
         }
 
         match support {
             0 => proposal.against_votes += weight,
             1 => proposal.for_votes += weight,
             2 => proposal.abstain_votes += weight,
-            _ => env.panic_with_error(Error::InvalidVote),
+            _ => return Err(Error::InvalidVote),
         }
 
         env.storage()
@@ -343,28 +344,24 @@ impl GovernorContract {
             },
         );
 
-        weight
+        Ok(weight)
     }
 
-    pub fn queue(env: Env, caller: Address, proposal_id: u32) {
+    pub fn queue(env: Env, caller: Address, proposal_id: u32) -> Result<(), Error> {
         caller.require_auth_for_args((proposal_id,).into_val(&env));
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
+        let mut proposal = load_proposal(&env, proposal_id)?;
 
-        if Self::state(env.clone(), proposal_id) != ProposalState::Succeeded {
-            env.panic_with_error(Error::InvalidState);
+        if Self::state(env.clone(), proposal_id)? != ProposalState::Succeeded {
+            return Err(Error::InvalidState);
         }
+
+        let config = load_config(&env)?;
 
         proposal.queued = true;
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-
-        let config: GovernanceConfig = env.storage().instance().get(&DataKey::Config).unwrap();
 
         let salt = env
             .crypto()
@@ -379,9 +376,7 @@ impl GovernorContract {
         );
 
         for i in 0..proposal.targets.len() {
-            let target = proposal.targets.get(i).unwrap();
-            let function = proposal.functions.get(i).unwrap();
-            let args = proposal.args.get(i).unwrap();
+            let (target, function, args) = proposal_action(&proposal, i)?;
 
             let schedule_args: Vec<Val> = vec![
                 &env,
@@ -402,8 +397,15 @@ impl GovernorContract {
 
         env.events()
             .publish((symbol_short!("queued"), proposal_id), ());
+        Ok(())
     }
 
+    pub fn execute(env: Env, caller: Address, proposal_id: u32) -> Result<(), Error> {
+        caller.require_auth_for_args((proposal_id,).into_val(&env));
+        // Load the config first so an uninitialised (or expired) instance
+        // storage surfaces as `NotInitialized` rather than a trap.
+        let config = load_config(&env)?;
+        let mut proposal = load_proposal(&env, proposal_id)?;
     pub fn execute(env: Env, caller: Address, proposal_id: u32) {
         caller.require_auth_for_args((proposal_id,).into_val(&env));
         let mut proposal: Proposal = env
@@ -412,15 +414,14 @@ impl GovernorContract {
             .get(&DataKey::Proposal(proposal_id))
             .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
 
-        let state = Self::state(env.clone(), proposal_id);
+        let state = Self::state(env.clone(), proposal_id)?;
         if proposal.executed || state != ProposalState::Queued {
-            env.panic_with_error(Error::InvalidState);
+            return Err(Error::InvalidState);
         }
 
-        let config: GovernanceConfig = env.storage().instance().get(&DataKey::Config).unwrap();
         let total_votes = proposal.for_votes + proposal.against_votes + proposal.abstain_votes;
         if (total_votes as u32) < config.min_quorum {
-            env.panic_with_error(Error::QuorumNotMet);
+            return Err(Error::QuorumNotMet);
         }
 
         let salt = env
@@ -429,9 +430,7 @@ impl GovernorContract {
         let salt_bytes = BytesN::from_array(&env, &salt.to_array());
 
         for i in 0..proposal.targets.len() {
-            let target = proposal.targets.get(i).unwrap();
-            let function = proposal.functions.get(i).unwrap();
-            let args = proposal.args.get(i).unwrap();
+            let (target, function, args) = proposal_action(&proposal, i)?;
 
             let execute_args: Vec<Val> = vec![
                 &env,
@@ -462,6 +461,7 @@ impl GovernorContract {
                 timestamp: env.ledger().timestamp(),
             },
         );
+        Ok(())
     }
 
     /// Cancel a proposal. Only the proposal creator may cancel it, and an
@@ -496,31 +496,27 @@ impl GovernorContract {
         );
     }
 
-    pub fn state(env: Env, proposal_id: u32) -> ProposalState {
-        let proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .unwrap_or_else(|| env.panic_with_error(Error::ProposalNotFound));
+    pub fn state(env: Env, proposal_id: u32) -> Result<ProposalState, Error> {
+        let proposal = load_proposal(&env, proposal_id)?;
 
         if proposal.canceled {
-            return ProposalState::Canceled;
+            return Ok(ProposalState::Canceled);
         }
         if proposal.executed {
-            return ProposalState::Executed;
+            return Ok(ProposalState::Executed);
         }
 
         let now = env.ledger().timestamp();
 
         if now < proposal.start_time {
-            return ProposalState::Pending;
+            return Ok(ProposalState::Pending);
         }
 
         if now <= proposal.end_time {
-            return ProposalState::Active;
+            return Ok(ProposalState::Active);
         }
 
-        let config: GovernanceConfig = env.storage().instance().get(&DataKey::Config).unwrap();
+        let config = load_config(&env)?;
 
         let total_supply: i128 = env.invoke_contract(
             &config.token,
@@ -530,24 +526,50 @@ impl GovernorContract {
         let total_votes = proposal.for_votes + proposal.against_votes + proposal.abstain_votes;
 
         if total_votes < config.min_quorum as i128 {
-            return ProposalState::Defeated;
+            return Ok(ProposalState::Defeated);
         }
 
         if (total_votes * 10000 / total_supply) < config.quorum_bps as i128 {
-            return ProposalState::Defeated;
+            return Ok(ProposalState::Defeated);
         }
 
         let support_votes = proposal.for_votes + proposal.against_votes;
         if support_votes == 0
             || (proposal.for_votes * 10000 / support_votes) < config.threshold_bps as i128
         {
-            return ProposalState::Defeated;
+            return Ok(ProposalState::Defeated);
         }
 
         if proposal.queued {
-            return ProposalState::Queued;
+            return Ok(ProposalState::Queued);
         }
 
-        ProposalState::Succeeded
+        Ok(ProposalState::Succeeded)
     }
+}
+
+/// Reads the governance config, returning [`Error::NotInitialized`] when it is
+/// absent (never initialised, or the instance entry has expired) instead of
+/// trapping with an `unwrap()` panic.
+fn load_config(env: &Env) -> Result<GovernanceConfig, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Config)
+        .ok_or(Error::NotInitialized)
+}
+
+fn load_proposal(env: &Env, proposal_id: u32) -> Result<Proposal, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Proposal(proposal_id))
+        .ok_or(Error::ProposalNotFound)
+}
+
+/// Returns the `i`-th (target, function, args) action of a proposal, or
+/// [`Error::InvalidState`] if the three action vectors have mismatched lengths.
+fn proposal_action(proposal: &Proposal, i: u32) -> Result<(Address, Symbol, Vec<Val>), Error> {
+    let target = proposal.targets.get(i).ok_or(Error::InvalidState)?;
+    let function = proposal.functions.get(i).ok_or(Error::InvalidState)?;
+    let args = proposal.args.get(i).ok_or(Error::InvalidState)?;
+    Ok((target, function, args))
 }
