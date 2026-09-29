@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { AnalysisTerminal } from "../components/AnalysisTerminal";
 import { SanctityScore } from "../components/SanctityScore";
@@ -12,9 +12,10 @@ import { nextScanProgressPhase } from "../lib/scan-progress";
 import { getSettingsHeaders } from "../lib/settings";
 import { exportToPdf } from "../lib/export-pdf";
 import { onShortcut } from "../lib/keyboard-shortcuts";
-import type { Finding, Severity } from "../types";
+import type { Finding } from "../types";
 import Link from "next/link";
 import { useOptionalToast } from "../providers/ToastProvider";
+import { useScan } from "./ScanContext";
 
 const CallGraph = dynamic(() => import("../components/CallGraph").then((m) => m.CallGraph), {
   ssr: false,
@@ -27,57 +28,62 @@ const CallGraph = dynamic(() => import("../components/CallGraph").then((m) => m.
 
 export default function ScanPage() {
   const toast = useOptionalToast();
-  const [logs, setLogs] = useState<string[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [findings, setFindings] = useState<Finding[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
-  const [hasRunScan, setHasRunScan] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
+  const {
+    logs,
+    isAnalyzing,
+    findings,
+    error,
+    selectedFile,
+    severityFilter,
+    hasRunScan,
+    setHasRunScan,
+    addLog,
+    setLogs,
+    setIsAnalyzing,
+    setFindings,
+    setError,
+    setSelectedFile,
+    setSeverityFilter,
+    resetScan,
+  } = useScan();
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isDraggingRef = useRef(false);
 
-  const addLog = (text: string) => {
-    setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${text}`]);
-  };
-
-  const processFiles = (files: FileList | null) => {
+  const processFiles = useCallback((files: FileList | null) => {
     if (!files) return;
-    const newFiles = Array.from(files).filter(f => f.name.endsWith('.rs'));
+    const newFiles = Array.from(files).filter((f) => f.name.endsWith(".rs"));
     if (newFiles.length > 0) {
-      setSelectedFiles(newFiles);
-      setError(null);
-      setFindings([]);
-      setLogs([]);
-      setHasRunScan(false);
+      setSelectedFile(newFiles[0]);
+      resetScan();
     }
-  };
+  }, [setSelectedFile, resetScan]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     processFiles(e.target.files);
-  };
+  }, [processFiles]);
 
-  const handleDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(true);
-  };
+    isDraggingRef.current = true;
+  }, []);
 
-  const handleDragLeave = (e: React.DragEvent<HTMLLabelElement>) => {
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(false);
-  };
+    isDraggingRef.current = false;
+  }, []);
 
-  const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+  const handleDrop = useCallback((e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(false);
+    isDraggingRef.current = false;
     processFiles(e.dataTransfer.files);
-  };
+  }, [processFiles]);
 
   const runAnalysis = useCallback(async () => {
-    if (selectedFiles.length === 0) return;
+    if (!selectedFile) return;
 
     setIsAnalyzing(true);
     setHasRunScan(false);
@@ -85,72 +91,63 @@ export default function ScanPage() {
     setFindings([]);
     setLogs([]);
 
-    let allFindings: Finding[] = [];
+    addLog(`Starting analysis for ${selectedFile.name}...`);
+    addLog(`Uploading contract to analysis engine...`);
 
-    for (const file of selectedFiles) {
-      addLog(`Starting analysis for ${file.name}...`);
-      addLog(`Uploading contract to analysis engine...`);
+    try {
+      const formData = new FormData();
+      formData.append("contract", selectedFile);
 
+      addLog(nextScanProgressPhase(0));
+      let phaseIndex = 1;
+      const logsTimer = setInterval(() => {
+        const phase = nextScanProgressPhase(phaseIndex);
+        phaseIndex += 1;
+        addLog(phase);
+      }, 1500);
+
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+        headers: getSettingsHeaders(),
+      });
+
+      clearInterval(logsTimer);
+
+      let data: Finding[];
       try {
-        const formData = new FormData();
-        formData.append("contract", file);
-
-        addLog(nextScanProgressPhase(0));
-        let phaseIndex = 1;
-        const logsTimer = setInterval(() => {
-          const phase = nextScanProgressPhase(phaseIndex);
-          phaseIndex += 1;
-          addLog(phase);
-        }, 1500);
-
-        const response = await fetch("/api/analyze", {
-          method: "POST",
-          body: formData,
-          headers: getSettingsHeaders(),
-        });
-
-        clearInterval(logsTimer);
-
-        let data;
-        try {
-          data = await response.json();
-        } catch {
-          throw new Error("Analysis failed");
-        }
-
-        if (!response.ok) {
-          throw new Error(data.error || "Analysis failed");
-        }
-
-        allFindings = allFindings.concat(data);
-        addLog(`Analysis complete for ${file.name}. Found ${data.length} potential issues.`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Analysis failed";
-        setError(msg);
-        addLog(`ERROR: ${msg}`);
-        toast.error(`Scan failed for ${file.name}: ${msg}`);
-        setIsAnalyzing(false);
-        return;
+        data = await response.json();
+      } catch {
+        throw new Error("Analysis failed");
       }
+
+      if (!response.ok) {
+        throw new Error((data as unknown as { error?: string }).error ?? "Analysis failed");
+      }
+
+      setFindings(data);
+      setHasRunScan(true);
+      addLog(`Analysis complete for ${selectedFile.name}. Found ${data.length} potential issues.`);
+      addLog(`All analyses complete. Found ${data.length} potential issues total.`);
+      addLog(`SUCCESS: Security report generated.`);
+      toast.success(
+        data.length === 0
+          ? "Scan complete: no issues found"
+          : `Scan complete: ${data.length} ${data.length === 1 ? "issue" : "issues"} found`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Analysis failed";
+      setError(msg);
+      addLog(`ERROR: ${msg}`);
+      toast.error(`Scan failed for ${selectedFile.name}: ${msg}`);
+    } finally {
+      setIsAnalyzing(false);
     }
+  }, [selectedFile, addLog, setIsAnalyzing, setHasRunScan, setError, setFindings, setLogs, toast]);
 
-    setFindings(allFindings);
-    setHasRunScan(true);
-    addLog(`All analyses complete. Found ${allFindings.length} potential issues total.`);
-    addLog(`SUCCESS: Security report generated.`);
-    toast.success(
-      allFindings.length === 0
-        ? "Scan complete: no issues found"
-        : `Scan complete: ${allFindings.length} ${allFindings.length === 1 ? "issue" : "issues"} found`,
-    );
-    setIsAnalyzing(false);
-  }, [selectedFiles, toast]);
-
-  // Keyboard shortcuts: ⌘U upload, ⌘↵ run, ⌘S export the report (see KeyboardShortcuts)
+  // Keyboard shortcuts: ⌘U upload, ⌘↵ run, ⌘S export the report
   useEffect(() => onShortcut("upload", () => fileInputRef.current?.click()), []);
-
   useEffect(() => onShortcut("run", () => void runAnalysis()), [runAnalysis]);
-
   useEffect(
     () =>
       onShortcut("save", async () => {
@@ -180,7 +177,7 @@ export default function ScanPage() {
       })
       .then(({ source }) => {
         if (cancelled) return;
-        setSelectedFiles([new File([source], `${name}.rs`, { type: "text/x-rust" })]);
+        setSelectedFile(new File([source], `${name}.rs`, { type: "text/x-rust" }));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -190,7 +187,7 @@ export default function ScanPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setSelectedFile, setError]);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 pb-20">
@@ -211,10 +208,11 @@ export default function ScanPage() {
             <div className={`absolute -inset-1 bg-gradient-to-r from-emerald-500 to-blue-500 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 ${isAnalyzing ? "animate-pulse" : ""}`} />
             <label
               className={`relative block overflow-hidden rounded-2xl border-2 border-dashed transition-all cursor-pointer bg-white dark:bg-zinc-900 shadow-xl ${
-                isDragging ? "border-emerald-500 bg-emerald-500/10" : selectedFiles.length > 0
-                ? "border-emerald-500/50 bg-emerald-500/5"
-                : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
+                selectedFile
+                  ? "border-emerald-500/50 bg-emerald-500/5"
+                  : "border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700"
               }`}
+              aria-label="Choose a Soroban contract source file to scan"
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
@@ -223,30 +221,22 @@ export default function ScanPage() {
                 ref={fileInputRef}
                 type="file"
                 accept=".rs"
-                multiple
                 onChange={handleFileChange}
                 className="hidden"
                 disabled={isAnalyzing}
-                aria-label="Choose Soroban contract source files to scan"
+                aria-label="Choose a Soroban contract source file to scan"
               />
               <div className="px-8 py-12 flex flex-col items-center text-center space-y-4">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-colors ${selectedFiles.length > 0 ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"}`}>
+                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-colors ${selectedFile ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400"}`}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
                 </div>
                 <div>
                   <p className="text-lg font-bold">
-                    {selectedFiles.length > 0
-                      ? `${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''} selected`
-                      : "Choose Rust contracts"}
+                    {selectedFile ? selectedFile.name : "Choose a Rust contract"}
                   </p>
                   <p className="text-sm text-zinc-500">
-                    Click to browse or drag and drop your .rs files
+                    Click to browse or drag and drop your .rs file
                   </p>
-                  {selectedFiles.length > 0 && (
-                    <div className="mt-4 text-xs text-zinc-600 dark:text-zinc-400 text-left space-y-1">
-                      {selectedFiles.map(f => <div key={f.name}>{f.name}</div>)}
-                    </div>
-                  )}
                 </div>
               </div>
             </label>
@@ -255,8 +245,8 @@ export default function ScanPage() {
           <div className="flex gap-4">
             <button
               onClick={runAnalysis}
-              disabled={selectedFiles.length === 0 || isAnalyzing}
-              className={`px-10 py-4 rounded-2xl font-bold transition-all shadow-2xl active:scale-95 flex items-center gap-3 ${selectedFiles.length === 0 || isAnalyzing
+              disabled={!selectedFile || isAnalyzing}
+              className={`px-10 py-4 rounded-2xl font-bold transition-all shadow-2xl active:scale-95 flex items-center gap-3 ${!selectedFile || isAnalyzing
                 ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed"
                 : "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 hover:scale-105 shadow-emerald-500/20"
                 }`}
@@ -357,14 +347,13 @@ export default function ScanPage() {
             <div className="space-y-6 pt-10 border-t border-zinc-200 dark:border-zinc-800">
               <h2 className="text-2xl font-bold tracking-tight">System Integrity Map</h2>
               <ErrorBoundary>
-                <CallGraph nodes={[]} edges={[]} /> {/* Call graph would need more data from API if desired */}
+                <CallGraph nodes={[]} edges={[]} />
                 <p className="text-xs text-zinc-500 text-center italic mt-4">Note: Visualizing complex call structures requires multiple analysis passes.</p>
               </ErrorBoundary>
             </div>
           </section>
         )}
       </main>
-
     </div>
   );
 }
