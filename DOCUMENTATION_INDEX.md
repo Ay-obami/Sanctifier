@@ -18,11 +18,6 @@
    - Common commands
    - Success criteria
 
-### For Decision Makers
-
-- **[COMPLETION_REPORT.md](COMPLETION_REPORT.md)** - What was delivered
-- **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - What's included
-
 ### Contributor & Community Policies
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution workflow and PR process
@@ -304,7 +299,6 @@
 ### "I want to understand the system"
 
 → **[ARCHITECTURE.md](ARCHITECTURE.md)** (15 min)  
-→ **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** (10 min)
 
 ### "I need to set up CI/CD"
 
@@ -324,8 +318,8 @@
 
 ### "I'm planning deployment"
 
-→ **[COMPLETION_REPORT.md](COMPLETION_REPORT.md)**  
-→ Check feature list and statistics
+→ **[SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md)**  
+→ Review prerequisites and deployment verification
 
 ### "I need production guidelines"
 
@@ -350,8 +344,6 @@
 | Document                                               | Time   | Topics           |
 | ------------------------------------------------------ | ------ | ---------------- |
 | [ARCHITECTURE.md](ARCHITECTURE.md)                     | 15 min | System design    |
-| [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) | 10 min | What's included  |
-| [COMPLETION_REPORT.md](COMPLETION_REPORT.md)           | 5 min  | Deliverables     |
 | Contract README                                        | 20 min | Contract details |
 | [docs/rule-authoring-guide.md](docs/rule-authoring-guide.md) | 15 min | Rule authoring |
 
@@ -523,10 +515,7 @@ See: [QUICK_START.md - Verification](QUICK_START.md#-check-results-1-min)
 | SOROBAN_DEPLOYMENT.md     | 12     | 30 min      | Complete reference |
 | docs/ci-cd-setup.md       | 10     | 20 min      | GitHub Actions     |
 | ARCHITECTURE.md           | 10     | 15 min      | System design      |
-| IMPLEMENTATION_SUMMARY.md | 8      | 10 min      | Deliverables       |
-| COMPLETION_REPORT.md      | 6      | 5 min       | Summary            |
 | Contract README           | 11     | 20 min      | Technical          |
-| **Total**                 | **69** | **115 min** | **Complete**       |
 
 ---
 
